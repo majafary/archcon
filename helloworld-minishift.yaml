@@ -1,0 +1,223 @@
+### 
+### Kubernetes Service accounts
+###
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hello
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: world
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: hello
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: hello
+        version: v1-tls
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: hello
+      containers:
+      - name: hello
+        image: wardviaene/http-echo:latest
+        env:
+        - name: TEXT
+          value: hello
+        - name: NEXT
+          value: "world:8080"
+        ports:
+        - name: http
+          containerPort: 8080
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: world
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: world
+        version: v1-tls
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: hello
+      containers:
+      - name: hello
+        image: wardviaene/http-echo:latest
+        env:
+        - name: TEXT
+          value: world
+        ports:
+        - name: http
+          containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+  labels:
+    app: hello
+spec:
+  selector:
+    app: hello
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: world
+  labels:
+    app: world
+spec:
+  selector:
+    app: world
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: helloworld-gateway
+spec:
+  selector:
+    istio: ingressgateway # use istio default controller
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: hello
+spec:
+  host: hello.myproject.svc.cluster.local
+  # uncomment to enable mutual TLS
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+  subsets:
+  - name: v1-tls
+    labels:
+      version: v1-tls
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+ name: world
+ namespace: myproject
+spec:
+ host: world.myproject.svc.cluster.local
+ subsets:
+ - labels:
+     version: v1-tls
+   name: v1-tls
+ trafficPolicy:
+   tls:
+     mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: helloworld-tls
+spec:
+  hosts:
+  - "hello-tls.example.com"
+  gateways:
+  - helloworld-gateway
+  http:
+  - route: 
+    - destination:
+        host: hello.myproject.svc.cluster.local
+        subset: v1-tls # match v3 only
+        port:
+          number: 8080
+---
+#
+# TLS
+# 
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: "enable-mtls"
+  namespace: "default" # even though we specify a namespace, this rule applies to all namespaces
+spec:
+  host: "*.local"
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+ name: "api-server"
+spec:
+ host: "api.openshift-apiserver.svc.cluster.local"
+ trafficPolicy:
+   tls:
+     mode: DISABLE
+---
+apiVersion: authentication.istio.io/v1alpha1
+kind: "MeshPolicy"
+metadata:
+  name: "default"
+spec:
+  peers:
+  - mtls: {}
+---
+#
+# echo server
+#
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: echoserver
+  namespace: myproject
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: echoserver
+    spec:
+      containers:
+      - name: echoserver
+        image: googlecontainer/echoserver:1.7
+        ports:
+        - name: http
+          containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echoserver
+  namespace: myproject
+  labels:
+    app: echoserver
+spec:
+  selector:
+    app: echoserver
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
